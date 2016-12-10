@@ -1,0 +1,212 @@
+---
+title: "Genomique TP7"
+author: "Madalina Ciortan"
+date: December 10, 2016
+output: pdf_document
+---
+
+
+## TP7 part A
+
+1. Load the Biostrings library (Bioconductor)
+
+```{r message=FALSE,warning=FALSE}
+library('Biostrings')
+```
+
+2. Create a simple DNA sequence (eg. CTACGGATCACT) and compute the nucleotide frequencies. 
+
+```{r}
+seq <- DNAString("CTACGGATCACT")
+letterFrequency(seq, c('A', 'C', 'G', 'T')) #as counts
+letterFrequency(seq, c('A', 'C', 'G', 'T'), as.prob = TRUE) #as percentage
+```
+
+3. Load the chr21.fa chromosome (hg19) sequence and compute the nucleotide frequencies and the number of missing values (N). 
+
+```{r}
+setwd("C:\\workspace\\bioinformatics")
+chr21 <-readDNAStringSet('chr21.fa')[[1]]
+#Nucleotide frequencies as %
+alphabetFrequency(chr21,as.prob = TRUE )
+#Nucleotide frequencies as counts
+alphabetFrequency(chr21)
+#Number of missing values
+alphabetFrequency(chr21)['N']
+#Frequency of A/C/G/T nucleotides only
+t <-letterFrequency(chr21, c('A', 'C', 'G', 'T'))
+t/sum(t) #expected frequency
+```
+
+4. Create a function that computes the Probability of a word given a the probabilities of the nucleotides (Bernouilli model) and compute the Probability of the word ATCCG given the nucleotide frequency. 
+
+```{r}
+word <- DNAString("ATCCG")
+
+prob <- function (s, p) {
+  result <- 1
+  for( i in 1 : length(s))
+    result <- result * p[as.character(s[i])]
+  as.numeric(result)
+}
+#Bernoulli model probability
+pBernoulli <- c('A' = 0.25, 'C' = 0.25, 'G' = 0.25, 'T' = 0.25)
+prob(word, pBernoulli)
+#Nucleotide frequency probability
+pNucleotide <- t/sum(t)
+prob(word, pNucleotide)
+
+```
+
+5. Compute the oligomers (7nt) frequency in the chr21. 
+
+
+```{r}
+#As counts (print just head)
+head(oligonucleotideFrequency(chr21, 7))
+#As % (print just head)
+head(oligonucleotideFrequency(chr21, 7,as.prob = TRUE ))
+
+```
+
+
+6. Create a data.frame with the oligomers observed number of occurrences, frequency, the expected frequency and their Pvalue (given the Bernoulli model).
+
+
+```{r}
+df<- as.data.frame(oligonucleotideFrequency(chr21, 7))
+colnames(df) <- c('counts')
+df$name <-rownames(df)
+df$obsFreq <- oligonucleotideFrequency(chr21, 7,as.prob = TRUE)
+
+#In bernoulli model we have the same probability for all nucleotides, so this column will be constant
+#it is enough to calculate the bernoulli probability for 1 oligomer and also its pValue
+sample <- DNAString("AAAAAAA")
+oligoBernoulliProb <- prob(sample, pBernoulli)
+df$bernoulliProb <-rep(oligoBernoulliProb, nrow(df))
+
+k<-length(sample)
+pValue <- pbinom(k - 1 , nrow(df), oligoBernoulliProb, lower.tail = F ) 
+df$pValueBernoulli <-rep(oligoBernoulliProb, nrow(df))
+
+observedFrequency <- alphabetFrequency(chr21,as.prob = TRUE)
+
+calcPValue <- function(df, observedFrequency, size){
+  seq <- DNAString(df['name'])
+  p<-prob(seq, observedFrequency)
+  k <-length(seq)
+  pValue <- pbinom(k - 1 , size, p, lower.tail = F ) 
+}
+
+head(df)
+
+
+df$observedPValue <-apply(df,1, calcPValue, observedFrequency, nrow(df))
+
+head(df)
+
+```
+
+
+\newpage
+## TP7 part B
+
+
+
+1. Download or reuse the Table Browser / refGene Table for UCSC for hg19 genome.
+
+```{r}
+genes <- read.table( "h19_refSeqGenes_tp7.gz", header = TRUE, comment.char = '')
+```
+
+2. Load the annotation in R and generate a data.frame with the RefSeq IDs (NM_***) the chr, the strand the transcript start end end (TSS, TES).
+
+```{r}
+d <- data.frame(id = genes$name, chr = genes$chrom, start = genes$txStart, end = genes$txEnd, strand = genes$strand)
+a21 <- d[d$chr == "chr21",]
+head(a21)
+```
+
+3. Generate a data.frame with the position of the promoter for all the RefSeq genes (-2000 upstream +500 downstream the TSS).
+
+```{r}
+plus <- a21[a21$strand == '+', ]
+minus <- a21[a21$strand == '-', ]
+
+promoteur_plus <- data.frame(chr = 'chr21', i = plus$start - 2000, j = plus$start + 500, strand = '+')
+promoteur_minus <- data.frame(chr = 'chr21', i = plus$end - 500, j = plus$end + 2000, strand = '-')
+
+head(promoteur_plus)
+head(promoteur_minus)
+
+```
+
+4. Extract the sequence for each promoter.
+
+```{r}
+extractSeq <- function(promoteur){
+  if ( as.character(promoteur['strand']) == '+') {
+    seq <- subseq(chr21, as.numeric(promoteur['i']), as.numeric(promoteur['j']))
+    paste(seq, collapse="") #keep string seq because it is atomic
+  } else {
+    seq <-reverseComplement(subseq(chr21, as.numeric(promoteur['i']), as.numeric(promoteur['j'])))
+    paste(seq, collapse="") #keep string seq because it is atomic
+  }
+}
+
+
+promoteur_plus$seq <- apply(promoteur_plus,1, extractSeq)
+promoteur_minus$seq <- apply(promoteur_minus,1, extractSeq)
+
+head(promoteur_plus)
+head(promoteur_minus)
+```
+
+5. Compute the observed number of occurrences, expected frequency and the Pvalue (Bernoulli model) for all the oligo of length 7nt.
+
+```{r}
+#As aggregating pValues for all 7nt oligos for all promoters requires 
+#a well defined function, the most significant oligo is also the most encountered one
+#This method returns the counts structure which can easily be aggregated as sum for
+#all promoters by strand
+calculateStats <-function (sequences, size){
+  result <- calculateStatsForSequence(sequences[1])
+  for (i in 2:size){
+    counts <- calculateStatsForSequence(sequences[1])
+    result <- result + counts
+  }
+  result
+}
+
+calculateStatsForSequence <-function (sequence){
+  seq <-DNAString(sequence)
+  counts <- oligonucleotideFrequency(seq, 7)
+  observedFrequency <- oligonucleotideFrequency(seq, 7, as.prob = TRUE)
+  random7NString <- DNAString("AAAAAAA")
+  oligoBernoulliProb <- prob(random7NString, pBernoulli)
+  df<- as.data.frame(oligonucleotideFrequency(seq, 7))
+  df$name <-rownames(df)
+  #observedPValue <-apply(df,1, calcPValue, observedFrequency, nrow(df))
+  counts
+}
+
+allCountsPlus <- calculateStats(promoteur_plus$seq, nrow(promoteur_plus))
+allCountsMinus <- calculateStats(promoteur_minus$seq, nrow(promoteur_minus))
+```
+
+6. What is the most significant oligo?
+
+```{r}
+
+mostSignificantOligos <-function (allCounts){
+  df<- as.data.frame(allCounts)
+  colnames(df) <- c('counts')
+  df$name <-rownames(df)
+  df<-df[order(df$counts, decreasing = TRUE), ]
+  head(df) 
+}
+
+head(mostSignificantOligos(allCountsPlus))
+head(mostSignificantOligos(allCountsMinus))
+
+```
